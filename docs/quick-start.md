@@ -5,8 +5,8 @@
 ## 1. 克隆仓库
 
 ```bash
-git clone https://github.com/ibarnard/YdxbotV2.git
-cd YdxbotV2
+git clone https://github.com/alanxie1999/YDX.git
+cd YDX
 ```
 
 ## 2. 准备 Python 环境
@@ -137,4 +137,8 @@ help
 
 - `admin_console`
 - `notification.channels`
+
+### AI 配置是否必需？
+
+当前版本使用简单跟随策略，**不需要配置 AI 密钥**。`ai` 配置块可以省略或留空。
 
