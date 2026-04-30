@@ -2,7 +2,7 @@
 模拟交替下注策略测试
 策略：
 - 跟随上一手：历史最后一手是 1 押大，是 0 押小
-- 6 位交替检测：最近 5 手是 10101 或 01010 时反向打破
+- 5 位交替检测：最近 5 手是 10101 或 01010 时反向打破
 """
 
 def simulate_bet(history):
@@ -14,7 +14,7 @@ def simulate_bet(history):
         last_5 = "".join(str(x) for x in history[-5:])
         if last_5 in ("10101", "01010"):
             prediction = 1 - history[-1]
-            return prediction, f"6 位纯交替{last_5}，反向下注{'大' if prediction == 1 else '小'}"
+            return prediction, f"5 位纯交替{last_5}，第 5 注后反向下注{'大' if prediction == 1 else '小'}"
     
     # 跟随上一手
     prediction = history[-1]
