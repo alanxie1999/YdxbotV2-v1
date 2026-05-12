@@ -3053,12 +3053,30 @@ def _apply_sequence_bet_override(
     history: list,
     prediction: int,
 ) -> int:
-    """序列下注：检测到触发前缀后，按后续序列依次下注。"""
+    """序列下注：检测到触发前缀后，按后续序列依次下注。连续 2 次不匹配则退出。"""
     seq_active = rt.get("seq_bet_active", False)
     seq_index = rt.get("seq_bet_index", 0)
     seq_values = rt.get("seq_bet_values", [])
     seq_label = rt.get("seq_bet_label", "")
     seq_trigger = rt.get("seq_bet_trigger", "")
+    seq_mismatch_count = rt.get("seq_bet_mismatch_count", 0)
+
+    if seq_active and seq_index > 0:
+        prev_actual = history[-1] if len(history) >= 1 else None
+        if prev_actual is not None:
+            prev_predicted = seq_values[seq_index - 1]
+            if prev_actual != prev_predicted:
+                seq_mismatch_count += 1
+            else:
+                seq_mismatch_count = 0
+
+            if seq_mismatch_count >= 2:
+                _clear_sequence_bet_runtime(rt)
+                trigger = _detect_sequence_bet_trigger(history)
+                if trigger.get("active", False):
+                    pass
+                else:
+                    return int(prediction)
 
     if not seq_active:
         trigger = _detect_sequence_bet_trigger(history)
@@ -3071,6 +3089,7 @@ def _apply_sequence_bet_override(
         seq_values = list(trigger["follow_sequence"])
         seq_label = trigger["label"]
         seq_trigger = trigger["trigger_prefix"]
+        seq_mismatch_count = 0
 
     if seq_index >= len(seq_values):
         _clear_sequence_bet_runtime(rt)
@@ -3082,18 +3101,21 @@ def _apply_sequence_bet_override(
         seq_values = list(new_trigger["follow_sequence"])
         seq_label = new_trigger["label"]
         seq_trigger = new_trigger["trigger_prefix"]
+        seq_mismatch_count = 0
 
     forced_prediction = int(seq_values[seq_index])
     side_text = "大" if forced_prediction == 1 else "小"
     position = seq_index + 1
     total = len(seq_values)
-    reason_text = f"检测到{seq_label}（触发{seq_trigger}），按序下注第{position}/{total}手：{side_text}"
+    mismatch_text = f"（连续不匹配{seq_mismatch_count}次）" if seq_mismatch_count > 0 else ""
+    reason_text = f"检测到{seq_label}（触发{seq_trigger}），按序下注第{position}/{total}手：{side_text}{mismatch_text}"
 
     rt["seq_bet_active"] = True
     rt["seq_bet_index"] = seq_index + 1
     rt["seq_bet_values"] = seq_values
     rt["seq_bet_label"] = seq_label
     rt["seq_bet_trigger"] = seq_trigger
+    rt["seq_bet_mismatch_count"] = seq_mismatch_count
     rt["last_predict_source"] = "sequence_bet"
     rt["last_predict_tag"] = "SEQUENCE_BET"
     rt["last_predict_confidence"] = 100
@@ -3120,6 +3142,7 @@ def _clear_sequence_bet_runtime(rt: dict) -> None:
     rt["seq_bet_values"] = []
     rt["seq_bet_label"] = ""
     rt["seq_bet_trigger"] = ""
+    rt["seq_bet_mismatch_count"] = 0
 
 
 def _apply_alternation_break_override(
