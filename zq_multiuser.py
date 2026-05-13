@@ -4254,15 +4254,34 @@ async def _process_bet_on_slim(client, event, user_ctx: UserContext, global_conf
     history_signature = "".join(str(x) for x in state.history[-12:])
     history = state.history
     
-    # 简单跟随策略：跟随上一手结果下注
-    # 检测 5 位纯交替模式（10101 或 01010）
     log_event(logging.INFO, 'bet_on', '策略诊断', user_id=user_ctx.user_id, 
               data=f"历史：{history[-10:]}, 最后一手：{history[-1] if history else '无'}")
     
-    if len(history) >= 5:
+    # 优先级 1: 固定数据规律检测（支持 5 位和 6 位模式）
+    fixed_signal = _detect_fixed_pattern_signal(history)
+    if fixed_signal.get("active"):
+        prediction = fixed_signal["prediction"]
+        follow = fixed_signal.get("follow_pattern", "")
+        seq = fixed_signal.get("detected_seq", "")
+        label = fixed_signal.get("label", "固定规律")
+        
+        if follow == "reverse":
+            reason = f"检测到{label}（{seq}），反向下注{'大' if prediction == 1 else '小'}"
+        elif follow == "same":
+            reason = f"检测到{label}（{seq}），同向下注{'大' if prediction == 1 else '小'}"
+        else:
+            reason = f"检测到{label}（{seq}），按照规律下注{'大' if prediction == 1 else '小'}"
+        
+        rt["last_predict_source"] = "fixed_pattern"
+        rt["last_predict_tag"] = "FIXED_PATTERN"
+        rt["last_predict_confidence"] = 100
+        rt["last_predict_reason"] = reason
+        log_event(logging.INFO, 'bet_on', '固定规律', user_id=user_ctx.user_id,
+                  data=f"seq={seq}, follow={follow}, prediction={prediction}")
+    # 优先级 2: 5 位纯交替打破
+    elif len(history) >= 5:
         last_5 = "".join(str(x) for x in history[-5:])
         if last_5 in ("10101", "01010"):
-            # 5 位纯交替，下注与上一手相反（打破交替）
             prediction = 1 - history[-1]
             rt["last_predict_source"] = "alternation_break"
             rt["last_predict_tag"] = "ALTERNATION_BREAK"
@@ -4271,7 +4290,6 @@ async def _process_bet_on_slim(client, event, user_ctx: UserContext, global_conf
             log_event(logging.INFO, 'bet_on', '交替打破', user_id=user_ctx.user_id,
                       data=f"last_5={last_5}, history[-1]={history[-1]}, prediction={prediction}")
         else:
-            # 正常跟随上一手
             prediction = history[-1]
             rt["last_predict_source"] = "follow_last"
             rt["last_predict_tag"] = "FOLLOW_TREND"
@@ -4280,14 +4298,12 @@ async def _process_bet_on_slim(client, event, user_ctx: UserContext, global_conf
             log_event(logging.INFO, 'bet_on', '跟随策略', user_id=user_ctx.user_id,
                       data=f"history[-1]={history[-1]}, prediction={prediction}")
     elif len(history) > 0:
-        # 历史不足 5 手，直接跟随最后一手
         prediction = history[-1]
         rt["last_predict_source"] = "follow_last"
         rt["last_predict_tag"] = "FOLLOW_TREND"
         rt["last_predict_confidence"] = 50
         rt["last_predict_reason"] = f"跟随上一手{history[-1]}，下{'大' if prediction == 1 else '小'}"
     else:
-        # 没有历史数据，默认下大
         prediction = 1
         rt["last_predict_source"] = "default"
         rt["last_predict_tag"] = "DEFAULT"
