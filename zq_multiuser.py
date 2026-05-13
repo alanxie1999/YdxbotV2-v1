@@ -3953,6 +3953,8 @@ async def _process_bet_on_slim(client, event, user_ctx: UserContext, global_conf
     if history_changed:
         await _push_market_broadcast_snapshot(user_ctx, state.history)
 
+    rt["_current_history"] = list(state.history)
+
     next_bet_amount_snapshot = calculate_bet_amount(rt)
     if _verbose_runtime_diag_enabled():
         log_event(
@@ -4790,7 +4792,9 @@ def _get_dragon_extra_bet_amount(rt: dict, history: list = None) -> int:
         return 0
 
     if history is None:
-        history = rt.get("_history_cache", [])
+        history = rt.get("_current_history", [])
+        if not history:
+            history = rt.get("_history_cache", [])
     else:
         rt["_history_cache"] = history
 
