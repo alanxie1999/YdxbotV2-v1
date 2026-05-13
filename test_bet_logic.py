@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""下注逻辑完整模拟测试 - 集成固定规律后"""
+"""完整下注逻辑模拟 - 包含长龙不中后重置逻辑"""
 
 FIXED_PATTERNS = {
     "010101": {"follow": "reverse", "label": "交替循环反转"},
@@ -92,9 +92,11 @@ def simulate(history_sequence, description="", initial_amount=500):
     print(f"测试: {description}")
     print(f"序列: {' '.join(str(x) for x in history_sequence)}\n")
     
-    rt = {"lose_count": 0, "bet_amount": initial_amount,
-          "dragon_extra_active": False, "total_bet": 0,
-          "total_win": 0, "total_extra": 0}
+    rt = {
+        "lose_count": 0, "win_count": 0, "bet_amount": initial_amount,
+        "initial_amount": initial_amount, "dragon_extra_active": False,
+        "total_bet": 0, "total_win": 0, "total_extra": 0, "dragon_bet_count": 0
+    }
     
     for i in range(len(history_sequence)):
         hist = history_sequence[:i]
@@ -102,40 +104,55 @@ def simulate(history_sequence, description="", initial_amount=500):
         
         pred, label, follow, seq = get_prediction(hist, rt)
         extra = _get_dragon_extra(rt, hist)
-        streak, _ = _get_history_tail_streak(hist)
+        streak, side = _get_history_tail_streak(hist)
         
+        current_bet = rt["bet_amount"] + extra
         match = pred == actual
         m = "✓" if match else "✗"
         pt = "大" if pred == 1 else "小"
         at = "大" if actual == 1 else "小"
         ex = f" +25万(龙尾{streak}连)" if extra > 0 else ""
         
-        print(f"  第{i+1:2d}手: {pt} -> {at} {m} [{label}]{ex}")
+        print(f"  第{i+1:2d}手: {pt} -> {at} {m} [{label}]{ex} (下注{current_bet})")
         
         if match:
             rt["win_count"] = rt.get("win_count", 0) + 1
             rt["lose_count"] = 0
-            rt["total_win"] += rt["bet_amount"] * 0.99
+            win_amount = rt["bet_amount"] * 0.99
+            rt["total_win"] += win_amount + extra
             rt["bet_amount"] = initial_amount
+            if extra > 0:
+                rt["dragon_bet_count"] += 1
         else:
             rt["lose_count"] += 1
             rt["win_count"] = 0
-            rt["bet_amount"] = rt["bet_amount"] * 2.1
+            # 长龙额外加注不中后，按默认金额下注
+            if rt.get("dragon_extra_active", False):
+                rt["bet_amount"] = initial_amount
+                rt["dragon_extra_active"] = False
+                print(f"         -> 龙尾不中，重置为默认金额{initial_amount}")
+            else:
+                rt["bet_amount"] = rt["bet_amount"] * 2.1
         
-        rt["total_bet"] += rt["bet_amount"] + extra
+        rt["total_bet"] += current_bet
         rt["total_extra"] += extra
     
     net = rt["total_win"] - rt["total_bet"]
-    print(f"\n  总下注={rt['total_bet']:.0f}, 总赢={rt['total_win']:.0f}, 净盈亏={net:.0f}, 额外加注={rt['total_extra']}")
+    print(f"\n  统计: 总下注={rt['total_bet']:.0f}, 总赢={rt['total_win']:.0f}, 净盈亏={net:.0f}")
+    print(f"  长龙加注: 总额={rt['total_extra']}, 成功次数={rt.get('dragon_bet_count', 0)}")
 
 
-print("下注逻辑集成测试 (固定规律 + 交替打破 + 长龙加注)")
+print("完整下注逻辑模拟")
 print("="*70)
 
-simulate([0, 0, 1, 0, 1, 0], "00101 反向下注")
+# 测试 1: 6 连大后额外加注，不中后重置
+simulate([1, 1, 1, 1, 1, 1, 1, 0, 1], "6 连大后额外加注，第 8 手不中重置")
+
+# 测试 2: 长龙连续中后不中
+simulate([1, 1, 1, 1, 1, 1, 1, 1, 1, 0], "9 连大后不中")
+
+# 测试 3: 001010 同向
 simulate([0, 0, 1, 0, 1, 0, 0], "001010 同向下注")
-simulate([1, 1, 0, 1, 0, 1], "11010 反向下注")
-simulate([1, 1, 0, 1, 0, 1, 1], "110101 同向下注")
-simulate([0, 1, 0, 1, 0, 1, 1], "010101 交替循环反转")
-simulate([1, 1, 1, 1, 1, 1, 1, 0], "6 连大后额外加注")
-simulate([1, 1, 1, 1, 1, 1, 0], "6 连大后中断")
+
+# 测试 4: 00101 反向
+simulate([0, 0, 1, 0, 1, 0], "00101 反向下注")
