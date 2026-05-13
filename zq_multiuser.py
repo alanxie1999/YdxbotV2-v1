@@ -661,7 +661,13 @@ def _apply_inferred_settle_from_history(state: UserState, rt: Dict[str, Any], op
             int(active_chain_summary.get("lose_count", 0)),
             old_lose_count + 1,
         )
-        rt["bet_amount"] = int(active_chain_summary.get("last_amount", bet_amount) or bet_amount)
+        # 长龙额外加注不中后，按默认金额下注
+        if rt.get("dragon_extra_active", False):
+            rt["bet_amount"] = int(rt.get("initial_amount", 500))
+            rt["dragon_extra_active"] = False
+            rt["dragon_tail_streak"] = 0
+        else:
+            rt["bet_amount"] = int(active_chain_summary.get("last_amount", bet_amount) or bet_amount)
     if win or rt.get("lose_count", 0) >= rt.get("lose_stop", 13):
         rt["bet_sequence_count"] = 0
         rt["bet_amount"] = int(rt.get("initial_amount", 500))
@@ -6343,7 +6349,13 @@ async def _process_settle_slim(client, event, user_ctx: UserContext, global_conf
                     int(active_chain_summary.get("lose_count", 0)),
                     int(old_lose_count) + 1,
                 )
-                rt["bet_amount"] = int(active_chain_summary.get("last_amount", bet_amount) or bet_amount)
+                # 长龙额外加注不中后，按默认金额下注
+                if rt.get("dragon_extra_active", False):
+                    rt["bet_amount"] = int(rt.get("initial_amount", 500))
+                    rt["dragon_extra_active"] = False
+                    rt["dragon_tail_streak"] = 0
+                else:
+                    rt["bet_amount"] = int(active_chain_summary.get("last_amount", bet_amount) or bet_amount)
 
             if _verbose_runtime_diag_enabled():
                 log_event(
