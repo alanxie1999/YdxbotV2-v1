@@ -670,6 +670,18 @@ def _apply_inferred_settle_from_history(state: UserState, rt: Dict[str, Any], op
             rt["dragon_tail_streak"] = 0
         else:
             rt["bet_amount"] = int(active_chain_summary.get("last_amount", bet_amount) or bet_amount)
+    
+    # 固定金额模式：连输达到 auto_pause_count 后标记待暂停
+    auto_pause_count = int(rt.get("auto_pause_count", 0) or 0)
+    is_fixed_bet = (rt.get("lose_once", 3.0) == 1.0 and rt.get("lose_twice", 2.1) == 1.0 and 
+                    rt.get("lose_three", 2.1) == 1.0 and rt.get("lose_four", 2.05) == 1.0)
+    if not win and is_fixed_bet and auto_pause_count > 0:
+        lose_count = rt.get("lose_count", 0)
+        if lose_count >= auto_pause_count:
+            # 标记待暂停，在 _handle_fixed_bet_auto_pause_after_settle 中实际执行
+            rt["auto_pause_triggered"] = True
+            rt["auto_pause_lose_count"] = lose_count
+    
     if win or rt.get("lose_count", 0) >= rt.get("lose_stop", 13):
         rt["bet_sequence_count"] = 0
         rt["bet_amount"] = int(rt.get("initial_amount", 500))
@@ -1943,7 +1955,8 @@ def _build_help_card() -> str:
         "• <code>/st fix2000_same/fix2000_rev</code> 固定 2000\n"
         "• <code>/st fix5000_same/fix5000_rev</code> 固定 5000\n"
         "• <code>/st fix1w_same/fix1w_rev</code> 固定 10000\n"
-        "<i>同向=跟随上一手结果，反向=与上一手结果相反</i>\n\n"
+        "<i>同向=跟随上一手结果，反向=与上一手结果相反</i>\n"
+        "<i>连输 10 局自动暂停 10 局，暂停结束后继续</i>\n\n"
         "<b>🛠 系统与数据（进阶）</b>\n"
         "• <code>/res tj</code> 重置收益/胜率统计\n"
         "• <code>/res state</code> 彻底重置状态\n"
@@ -5824,6 +5837,52 @@ async def _trigger_deep_risk_pause_after_settle(
     return True
 
 
+async def _handle_fixed_bet_auto_pause_after_settle(
+    client,
+    user_ctx: UserContext,
+    global_config: dict,
+) -> bool:
+    """处理固定金额模式连输自动暂停后的通知。"""
+    rt = user_ctx.state.runtime
+    
+    # 检查是否触发了自动暂停
+    if not rt.get("auto_pause_triggered", False):
+        return False
+    
+    auto_pause_count = int(rt.get("auto_pause_count", 0) or 0)
+    lose_count = int(rt.get("auto_pause_lose_count", 0) or 0)
+    
+    if auto_pause_count <= 0 or lose_count <= 0:
+        # 清除触发标记
+        rt["auto_pause_triggered"] = False
+        rt.pop("auto_pause_lose_count", None)
+        return False
+    
+    # 设置暂停
+    _enter_pause(rt, auto_pause_count, f"固定金额模式连输{lose_count}局自动暂停")
+    rt["bet_on"] = False
+    rt["mode_stop"] = True
+    
+    # 清除触发标记
+    rt["auto_pause_triggered"] = False
+    rt.pop("auto_pause_lose_count", None)
+    
+    resume_hint = _build_pause_resume_hint(rt)
+    pause_msg = (
+        f"⛔ 固定金额模式自动暂停 ⛔\n\n"
+        f"触发原因：连输{lose_count}局达到暂停阈值\n"
+        f"暂停局数：{auto_pause_count} 局\n"
+        f"暂停期间：不重置连输计数，保持当前状态\n"
+        f"{resume_hint}"
+    )
+    
+    await send_message_v2(client, "pause", pause_msg, user_ctx, global_config)
+    log_event(logging.INFO, 'settle', '固定金额模式连输暂停', user_id=user_ctx.user_id,
+              data=f"连输{lose_count}局，暂停{auto_pause_count}局")
+    
+    return True
+
+
 async def _handle_goal_pause_after_settle(
     client,
     user_ctx: UserContext,
@@ -6545,6 +6604,9 @@ async def _process_settle_slim(client, event, user_ctx: UserContext, global_conf
         if len(state.history) % 5 == 0:
             user_ctx.save_state()
 
+        # 固定金额模式连输自动暂停通知（在 goal pause 之前处理）
+        await _handle_fixed_bet_auto_pause_after_settle(client, user_ctx, global_config)
+
         await _handle_goal_pause_after_settle(client, user_ctx, global_config)
 
         if hasattr(user_ctx, 'dashboard_message') and user_ctx.dashboard_message:
@@ -7171,6 +7233,9 @@ async def process_user_command(client, event, user_ctx: UserContext, global_conf
                 # 读取方向参数（第 8 个参数，可选）
                 bet_direction = preset[7] if len(preset) > 7 else "auto"
                 rt["bet_direction"] = bet_direction
+                # 读取自动暂停参数（第 9 个参数，固定金额模式连输 n 局后暂停 n 局）
+                auto_pause_count = int(preset[8]) if len(preset) > 8 else 0
+                rt["auto_pause_count"] = auto_pause_count
                 await _clear_pause_countdown_notice(client, user_ctx)
                 rt["switch"] = True
                 rt["manual_pause"] = False
