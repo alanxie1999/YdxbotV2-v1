@@ -4278,6 +4278,23 @@ async def _process_bet_on_slim(client, event, user_ctx: UserContext, global_conf
         rt["last_predict_reason"] = f"强制延续下注 (剩余 {forced_remaining} 次)"
         log_event(logging.INFO, 'bet_on', '强制延续', user_id=user_ctx.user_id,
                   data=f"direction={prediction}, remaining={forced_remaining}")
+    # 优先级 0.5: 预设级别的方向设定（固定金额模式专用）
+    elif rt.get("bet_direction") in ("same", "reverse") and history:
+        bet_direction = rt.get("bet_direction")
+        if bet_direction == "same":
+            prediction = history[-1]  # 同向：跟随上一手
+            rt["last_predict_source"] = "preset_same_direction"
+            rt["last_predict_tag"] = "PRESET_SAME"
+            rt["last_predict_confidence"] = 100
+            rt["last_predict_reason"] = f"预设同向下注：跟随上一手{'大' if prediction == 1 else '小'}"
+        else:  # reverse
+            prediction = 1 - history[-1]  # 反向：与上一手相反
+            rt["last_predict_source"] = "preset_reverse_direction"
+            rt["last_predict_tag"] = "PRESET_REVERSE"
+            rt["last_predict_confidence"] = 100
+            rt["last_predict_reason"] = f"预设反向下注：与上一手相反{'大' if prediction == 1 else '小'}"
+        log_event(logging.INFO, 'bet_on', '预设方向', user_id=user_ctx.user_id,
+                  data=f"bet_direction={bet_direction}, prediction={prediction}")
     # 优先级 1: 固定数据规律检测（支持 5 位和 6 位模式）
     elif True:
         fixed_signal = _detect_fixed_pattern_signal(history)
@@ -7136,6 +7153,9 @@ async def process_user_command(client, event, user_ctx: UserContext, global_conf
                 rt["initial_amount"] = int(preset[6])
                 rt["current_preset_name"] = preset_name
                 rt["bet_amount"] = int(preset[6])
+                # 读取方向参数（第 8 个参数，可选）
+                bet_direction = preset[7] if len(preset) > 7 else "auto"
+                rt["bet_direction"] = bet_direction
                 await _clear_pause_countdown_notice(client, user_ctx)
                 rt["switch"] = True
                 rt["manual_pause"] = False
@@ -7148,11 +7168,13 @@ async def process_user_command(client, event, user_ctx: UserContext, global_conf
                 _clear_lose_recovery_tracking(rt)
                 user_ctx.save_state()
                 
+                direction_label = {"same": "同向", "reverse": "反向", "auto": "跟随策略"}.get(bet_direction, bet_direction)
                 mes = _build_ops_card(
-                    f"🎯 预设启动成功: {preset_name}",
+                    f"🎯 预设启动成功：{preset_name}",
                     summary="当前账号已经切换到新的预设，后续将按这套参数进入可下注状态。",
                     fields=[
                         ("策略参数", f"{preset[0]} {preset[1]} {preset[2]} {preset[3]} {preset[4]} {preset[5]} {preset[6]}"),
+                        ("下注方向", direction_label),
                     ],
                     action="建议留意本轮自动测算结果，并用 `status` 确认当前状态。",
                 )
@@ -7980,6 +8002,7 @@ def _parse_yc_params(args, presets):
             "lose_three": float(preset[4]),
             "lose_four": float(preset[5]),
             "initial_amount": int(preset[6]),
+            "bet_direction": preset[7] if len(preset) > 7 else "auto",
         }
         return params, args[0], None
 
@@ -7993,6 +8016,7 @@ def _parse_yc_params(args, presets):
                 "lose_three": float(args[4]),
                 "lose_four": float(args[5]),
                 "initial_amount": int(args[6]),
+                "bet_direction": args[7] if len(args) > 7 else "auto",
             }
             return params, "自定义", None
         except ValueError:
@@ -8082,6 +8106,11 @@ def _build_yc_result_message(params, preset_name: str, current_fund: int, auto_t
         return f"{wan:.1f}"
 
     header_line = "🔮 已根据当前预设自动测算\n" if auto_trigger else ""
+    
+    # 读取方向参数
+    bet_direction = params.get('bet_direction', 'auto')
+    direction_label = {"same": "同向", "reverse": "反向", "auto": "跟随策略"}.get(bet_direction, bet_direction)
+    
     command_text = (
         f"{params['continuous']} {params['lose_stop']} "
         f"{params['lose_once']} {params['lose_twice']} {params['lose_three']} {params['lose_four']} {params['initial_amount']}"
@@ -8129,6 +8158,7 @@ def _build_yc_result_message(params, preset_name: str, current_fund: int, auto_t
             f"🔢 下注次数：{params['lose_stop']}次",
             f"💰 首注金额：{fmt_wan(int(params['initial_amount']))}万",
             f"💰 单注上限：{max_single_bet_limit / 10000:,.0f}万",
+            f"🧭 下注方向：{direction_label}",
             "",
             "🎯 策略总结:",
             f"菠菜资金：{fund_text}",
