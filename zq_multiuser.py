@@ -1,8 +1,8 @@
 """
 zq_multiuser.py - 多用户版本核心逻辑
-版本: 2.4.5
-日期: 2026-05-14
-功能: 多用户押注、结算、命令处理
+版本：2.4.6
+日期：2026-05-15
+功能：多用户押注、结算、命令处理
 """
 
 import logging
@@ -1965,11 +1965,15 @@ def _build_help_card() -> str:
         "• <code>/res bet</code> 只重置当前倍投链路\n"
         "• <code>/ver</code> 查看版本\n"
         "• <code>/restart</code> 重启程序\n"
-        "• <code>/update [版本]</code> 更新版本\n"
+        "• <code>/update</code> 更新到最新版本\n"
+        "• <code>/update &lt;版本&gt;</code> 更新到指定版本\n"
         "• <code>/reback [版本]</code> 回退版本\n"
         "• <code>/explain</code> 查看最近判断依据\n"
         "• <code>/users</code> 查看当前用户信息\n"
-        "• <code>/xx</code> 执行辅助数据操作"
+        "• <code>/xx</code> 执行辅助数据操作\n\n"
+        "<b>⚡ 快捷更新流程</b>\n"
+        "<code>/update → /restart → /status</code>\n"
+        "<i>一键三连：更新、重启、确认状态</i>"
     )
 
 
