@@ -271,7 +271,7 @@ ENTRY_GUARD_STEP4_MIN_CONF_EARLY = 68
 ENTRY_GUARD_STEP4_PAUSE_ROUNDS = 3
 ENTRY_GUARD_STEP4_ALLOWED_TAGS = {"DRAGON_CANDIDATE", "SINGLE_JUMP", "SYMMETRIC_WRAP"}
 UNSTABLE_PATTERN_TAGS = {"CHAOS_SWITCH", "SINGLE_JUMP", "SYMMETRIC_WRAP"}
-HIGH_PRESSURE_SKIP_MIN_STEP = 5
+HIGH_PRESSURE_SKIP_MIN_STEP = 6
 HIGH_PRESSURE_SKIP_MIN_CONF = 78
 UNSTABLE_PATTERN_MIN_CONF_STEP3 = 72
 UNSTABLE_PATTERN_MIN_CONF_STEP5 = 78
@@ -4904,7 +4904,7 @@ def calculate_bet_amount(rt: dict, history: list = None) -> int:
 
 
 def _get_dragon_extra_bet_amount(rt: dict, history: list = None) -> int:
-    """6连以上长龙期间，每次下注额外加500000，直到不中后停止。"""
+    """5 连以上长龙期间，每次下注额外加 1000000，直到不中后停止。"""
     if rt.get("lose_count", 0) > 0:
         rt["dragon_extra_active"] = False
         rt["dragon_tail_streak"] = 0
@@ -4920,19 +4920,19 @@ def _get_dragon_extra_bet_amount(rt: dict, history: list = None) -> int:
     else:
         rt["_history_cache"] = history
 
-    if not isinstance(history, list) or len(history) < 6:
+    if not isinstance(history, list) or len(history) < 5:
         rt["dragon_extra_active"] = False
         return 0
 
     streak, _ = _get_history_tail_streak(history)
 
-    if streak >= 6:
+    if streak >= 5:
         rt["dragon_extra_active"] = True
         rt["dragon_tail_streak"] = streak
-        return 500000
+        return 1000000
 
     if rt.get("dragon_extra_active", False):
-        return 500000
+        return 1000000
 
     return 0
 
