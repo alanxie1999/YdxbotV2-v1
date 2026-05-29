@@ -633,6 +633,53 @@ def mark_release_notified(tag_name: str, repo_root: Optional[str] = None) -> Non
     _save_json(root / RELEASE_STATE_FILE, state)
 
 
+def _auto_update_version_number(repo_root: Path) -> Dict[str, Any]:
+    """
+    自动更新版本号（基于 commit count）和日期。
+    在更新到新版本后调用，确保版本号与发布版本一致。
+    """
+    VERSION_FILE = repo_root / "zq_multiuser.py"
+    if not VERSION_FILE.exists():
+        return {"success": True, "reason": "版本文件不存在，跳过更新"}
+    
+    try:
+        content = VERSION_FILE.read_text(encoding="utf-8")
+        import re
+        
+        # 查找版本号行
+        version_match = re.search(r'^版本：(\d+\.\d+\.\d+)', content, re.MULTILINE)
+        if not version_match:
+            return {"success": True, "reason": "未找到版本号，跳过更新"}
+        
+        old_version = version_match.group(1)
+        
+        # 获取当前日期
+        from datetime import datetime
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # 更新版本号（minor 版本 +1）
+        parts = old_version.split(".")
+        new_version = f"{parts[0]}.{int(parts[1]) + 1}.{parts[2]}"
+        
+        # 替换版本号和日期
+        new_content = re.sub(r'^版本：\d+\.\d+\.\d+', f"版本：{new_version}", content, flags=re.MULTILINE)
+        new_content = re.sub(r'^日期：\d{4}-\d{2}-\d{2}', f"日期：{current_date}", new_content, flags=re.MULTILINE)
+        
+        if new_content != content:
+            VERSION_FILE.write_text(new_content, encoding="utf-8")
+            return {
+                "success": True,
+                "old_version": old_version,
+                "new_version": new_version,
+                "date": current_date,
+            }
+        
+        return {"success": True, "reason": "版本无需更新"}
+    
+    except Exception as e:
+        return {"success": False, "error": f"更新版本号失败：{str(e)}"}
+
+
 def mark_release_applied(tag_name: str, repo_root: Optional[str] = None) -> None:
     root = _repo_root(repo_root)
     state = get_release_state(root)
@@ -992,6 +1039,12 @@ def update_to_release(repo_root: Optional[str] = None, target_tag: Optional[str]
                 "error": f"切换到发布版本 {final_tag} 失败",
                 "detail": (checkout_res.stderr or checkout_res.stdout).strip()[:600],
             }
+
+        # 自动更新版本号和日期
+        from pathlib import Path
+        version_res = _auto_update_version_number(Path(root))
+        if not version_res.get("success"):
+            logger.warning(f"版本号自动更新失败：{version_res.get('error', 'unknown')}")
 
         health = run_health_check(root)
         if not health.get("success"):
