@@ -1,7 +1,7 @@
 """
 zq_multiuser.py - 多用户版本核心逻辑
-版本：2.4.6
-日期：2026-05-15
+版本：2.4.7
+日期：2026-07-02
 功能：多用户押注、结算、命令处理
 """
 
@@ -1930,6 +1930,7 @@ def _build_help_card() -> str:
         "• <code>/wlc [n]</code> 连输相关阈值\n\n"
         "<b>🤖 模型与策略（进阶）</b>\n"
         "• <code>/mfb [on/off]</code> 模型链异常时是否继续统计兜底下注\n"
+        "• <code>/edb [on/off]</code> 长龙增强开关（规律检测/交替打破/长龙加注）\n"
         "• <code>/model list</code> 查看可用模型\n"
         "• <code>/model select [编号/ID]</code> 切换模型（支持编号）\n"
         "<i>例：/model select 1</i>\n"
@@ -4346,44 +4347,62 @@ async def _process_bet_on_slim(client, event, user_ctx: UserContext, global_conf
             log_event(logging.INFO, 'bet_on', '预设方向', user_id=user_ctx.user_id,
                       data=f"bet_direction={bet_direction}, prediction={prediction}")
     # 优先级 1: 固定数据规律检测（支持 5 位和 6 位模式）
-    elif True:
-        fixed_signal = _detect_fixed_pattern_signal(history)
-        if fixed_signal.get("active"):
-            prediction = fixed_signal["prediction"]
-            follow = fixed_signal.get("follow_pattern", "")
-            seq = fixed_signal.get("detected_seq", "")
-            label = fixed_signal.get("label", "固定规律")
-            duration = fixed_signal.get("duration", 1)
-            
-            if duration > 1:
-                rt["forced_bet_remaining"] = duration - 1
-                rt["forced_bet_direction"] = prediction
-                direction_text = "反向" if follow == "reverse" else "同向"
-                reason = f"检测到{label}（{seq}），后续 {duration} 次{direction_text}下注{'大' if prediction == 1 else '小'}"
-            elif follow == "reverse":
-                reason = f"检测到{label}（{seq}），反向下注{'大' if prediction == 1 else '小'}"
-            elif follow == "same":
-                reason = f"检测到{label}（{seq}），同向下注{'大' if prediction == 1 else '小'}"
-            else:
-                reason = f"检测到{label}（{seq}），按照规律下注{'大' if prediction == 1 else '小'}"
-            
-            rt["last_predict_source"] = "fixed_pattern"
-            rt["last_predict_tag"] = "FIXED_PATTERN"
+    elif history:
+        if not rt.get("edb", True):
+            # edb 关闭时，仅按预设逻辑（跟随上一手）
+            prediction = history[-1]
+            rt["last_predict_source"] = "preset_follow"
+            rt["last_predict_tag"] = "PRESET_FOLLOW"
             rt["last_predict_confidence"] = 100
-            rt["last_predict_reason"] = reason
-            log_event(logging.INFO, 'bet_on', '固定规律', user_id=user_ctx.user_id,
-                      data=f"seq={seq}, follow={follow}, prediction={prediction}")
-        # 优先级 2: 5 位纯交替打破
-        elif len(history) >= 5:
-            last_5 = "".join(str(x) for x in history[-5:])
-            if last_5 in ("10101", "01010"):
-                prediction = 1 - history[-1]
-                rt["last_predict_source"] = "alternation_break"
-                rt["last_predict_tag"] = "ALTERNATION_BREAK"
+            rt["last_predict_reason"] = f"EDB关闭，跟随上一手{'大' if prediction == 1 else '小'}"
+            log_event(logging.INFO, 'bet_on', '预设跟随(EDB关闭)', user_id=user_ctx.user_id,
+                      data=f"history[-1]={history[-1]}, prediction={prediction}")
+        else:
+            fixed_signal = _detect_fixed_pattern_signal(history)
+            if fixed_signal.get("active"):
+                prediction = fixed_signal["prediction"]
+                follow = fixed_signal.get("follow_pattern", "")
+                seq = fixed_signal.get("detected_seq", "")
+                label = fixed_signal.get("label", "固定规律")
+                duration = fixed_signal.get("duration", 1)
+
+                if duration > 1:
+                    rt["forced_bet_remaining"] = duration - 1
+                    rt["forced_bet_direction"] = prediction
+                    direction_text = "反向" if follow == "reverse" else "同向"
+                    reason = f"检测到{label}（{seq}），后续 {duration} 次{direction_text}下注{'大' if prediction == 1 else '小'}"
+                elif follow == "reverse":
+                    reason = f"检测到{label}（{seq}），反向下注{'大' if prediction == 1 else '小'}"
+                elif follow == "same":
+                    reason = f"检测到{label}（{seq}），同向下注{'大' if prediction == 1 else '小'}"
+                else:
+                    reason = f"检测到{label}（{seq}），按照规律下注{'大' if prediction == 1 else '小'}"
+
+                rt["last_predict_source"] = "fixed_pattern"
+                rt["last_predict_tag"] = "FIXED_PATTERN"
                 rt["last_predict_confidence"] = 100
-                rt["last_predict_reason"] = f"5 位纯交替{last_5}，反向下注{'大' if prediction == 1 else '小'}"
-                log_event(logging.INFO, 'bet_on', '交替打破', user_id=user_ctx.user_id,
-                          data=f"last_5={last_5}, history[-1]={history[-1]}, prediction={prediction}")
+                rt["last_predict_reason"] = reason
+                log_event(logging.INFO, 'bet_on', '固定规律', user_id=user_ctx.user_id,
+                          data=f"seq={seq}, follow={follow}, prediction={prediction}")
+            # 优先级 2: 5 位纯交替打破
+            elif len(history) >= 5:
+                last_5 = "".join(str(x) for x in history[-5:])
+                if last_5 in ("10101", "01010"):
+                    prediction = 1 - history[-1]
+                    rt["last_predict_source"] = "alternation_break"
+                    rt["last_predict_tag"] = "ALTERNATION_BREAK"
+                    rt["last_predict_confidence"] = 100
+                    rt["last_predict_reason"] = f"5 位纯交替{last_5}，反向下注{'大' if prediction == 1 else '小'}"
+                    log_event(logging.INFO, 'bet_on', '交替打破', user_id=user_ctx.user_id,
+                              data=f"last_5={last_5}, history[-1]={history[-1]}, prediction={prediction}")
+                else:
+                    prediction = history[-1]
+                    rt["last_predict_source"] = "follow_last"
+                    rt["last_predict_tag"] = "FOLLOW_TREND"
+                    rt["last_predict_confidence"] = 50
+                    rt["last_predict_reason"] = f"跟随上一手{history[-1]}，下{'大' if prediction == 1 else '小'}"
+                    log_event(logging.INFO, 'bet_on', '跟随策略', user_id=user_ctx.user_id,
+                              data=f"history[-1]={history[-1]}, prediction={prediction}")
             else:
                 prediction = history[-1]
                 rt["last_predict_source"] = "follow_last"
@@ -4392,18 +4411,12 @@ async def _process_bet_on_slim(client, event, user_ctx: UserContext, global_conf
                 rt["last_predict_reason"] = f"跟随上一手{history[-1]}，下{'大' if prediction == 1 else '小'}"
                 log_event(logging.INFO, 'bet_on', '跟随策略', user_id=user_ctx.user_id,
                           data=f"history[-1]={history[-1]}, prediction={prediction}")
-        elif len(history) > 0:
-            prediction = history[-1]
-            rt["last_predict_source"] = "follow_last"
-            rt["last_predict_tag"] = "FOLLOW_TREND"
-            rt["last_predict_confidence"] = 50
-            rt["last_predict_reason"] = f"跟随上一手{history[-1]}，下{'大' if prediction == 1 else '小'}"
-        else:
-            prediction = 1
-            rt["last_predict_source"] = "default"
-            rt["last_predict_tag"] = "DEFAULT"
-            rt["last_predict_confidence"] = 50
-            rt["last_predict_reason"] = "无历史数据，默认下大"
+    else:
+        prediction = 1
+        rt["last_predict_source"] = "default"
+        rt["last_predict_tag"] = "DEFAULT"
+        rt["last_predict_confidence"] = 50
+        rt["last_predict_reason"] = "无历史数据，默认下大"
     
     rt["last_predict_info"] = f"预测方向：{'大' if prediction == 1 else '小'} - {rt['last_predict_reason']}"
     log_event(logging.INFO, 'bet_on', '最终预测', user_id=user_ctx.user_id, 
@@ -4904,7 +4917,9 @@ def calculate_bet_amount(rt: dict, history: list = None) -> int:
 
 
 def _get_dragon_extra_bet_amount(rt: dict, history: list = None) -> int:
-    """5 连以上长龙期间，每次下注额外加 1000000，直到不中后停止。"""
+    """5 连以上长龙期间，每次下注额外加 1000000，直到不中后停止。edb 关闭时禁用。"""
+    if not rt.get("edb", True):
+        return 0
     if rt.get("lose_count", 0) > 0:
         rt["dragon_extra_active"] = False
         rt["dragon_tail_streak"] = 0
@@ -7907,7 +7922,43 @@ async def process_user_command(client, event, user_ctx: UserContext, global_conf
                 global_config,
             )
             return
-        
+
+        # edb - 长龙开关（增强检测模式）
+        if cmd == "edb":
+            sub = my[1].lower() if len(my) > 1 else ""
+            if sub in ("on", "enable", "1"):
+                rt["edb"] = True
+                user_ctx.save_state()
+                mes = _build_ops_card(
+                    "🐉 长龙增强已开启",
+                    summary="固定规律检测、交替打破、长龙额外加注均已启用。",
+                    action="执行 `status` 可确认当前状态。",
+                )
+                log_event(logging.INFO, 'user_cmd', 'EDB已开启', user_id=user_ctx.user_id)
+            elif sub in ("off", "disable", "0"):
+                rt["edb"] = False
+                user_ctx.save_state()
+                mes = _build_ops_card(
+                    "🐉 长龙增强已关闭",
+                    summary="已禁用固定规律检测、交替打破和长龙额外加注，仅按预设方向下注。",
+                    action="执行 `status` 可确认当前状态。",
+                )
+                log_event(logging.INFO, 'user_cmd', 'EDB已关闭', user_id=user_ctx.user_id)
+            else:
+                current = rt.get("edb", True)
+                state_text = "开启" if current else "关闭"
+                mes = _build_ops_card(
+                    f"🐉 长龙增强状态：{state_text}",
+                    summary="长龙增强控制固定规律检测、交替打破和长龙额外加注。",
+                    fields=[("当前状态", state_text)],
+                    action="执行 `edb on` 开启，`edb off` 关闭。",
+                )
+            message = await send_to_admin(client, mes, user_ctx, global_config)
+            asyncio.create_task(delete_later(client, event.chat_id, event.id, 10))
+            if message:
+                asyncio.create_task(delete_later(client, message.chat_id, message.id, 10))
+            return
+
         # yss - 查看/删除预设 - 与master一致
         if cmd == "yss":
             if len(my) > 2 and my[1] == "dl":
