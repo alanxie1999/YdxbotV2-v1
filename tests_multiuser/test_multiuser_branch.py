@@ -4731,3 +4731,85 @@ def test_status_command_sends_dashboard_with_html_parse_mode(tmp_path, monkeypat
     assert sent["msg_type"] == "dashboard"
     assert sent["parse_mode"] == "html"
     assert "<b>【 状态监控 】</b>" in sent["message"]
+
+
+def _dragon_extra_rt(**overrides):
+    rt = {
+        "edb": True,
+        "win_count": 0,
+        "lose_count": 0,
+        "initial_amount": 5000,
+        "bet_amount": 5000,
+        "lose_stop": 13,
+        "lose_once": 3.0,
+        "lose_twice": 2.5,
+        "lose_three": 2.2,
+        "lose_four": 2.1,
+        "dragon_extra_active": False,
+    }
+    rt.update(overrides)
+    return rt
+
+
+def test_dragon_extra_same_direction_triggers_on_five_streak():
+    history = [0, 1, 1, 1, 1, 1]
+    signal = zm._detect_dragon_extra_signal(history)
+    assert signal["active"] is True
+    assert signal["kind"] == "same"
+    assert signal["direction"] == 1
+
+    rt = _dragon_extra_rt()
+    amount = zm._get_dragon_extra_bet_amount(rt, history)
+    assert amount == 1_000_000
+    assert rt["dragon_extra_active"] is True
+    assert zm._apply_dragon_extra_direction(rt, history, 0) == 1
+    assert zm.calculate_bet_amount(rt, history) == 1_005_000
+
+
+def test_dragon_extra_alternation_triggers_on_five_streak():
+    history = [1, 0, 1, 0, 1]
+    signal = zm._detect_dragon_extra_signal(history)
+    assert signal["active"] is True
+    assert signal["kind"] == "alt"
+    assert signal["direction"] == 0
+
+    rt = _dragon_extra_rt()
+    amount = zm._get_dragon_extra_bet_amount(rt, history)
+    assert amount == 1_000_000
+    assert zm._apply_dragon_extra_direction(rt, history, 1) == 0
+
+
+def test_dragon_extra_keeps_going_after_win():
+    history = [1, 1, 1, 1, 1]
+    rt = _dragon_extra_rt()
+    assert zm._get_dragon_extra_bet_amount(rt, history) == 1_000_000
+
+    history = history + [1]
+    rt["win_count"] = 1
+    rt["lose_count"] = 0
+    assert zm._get_dragon_extra_bet_amount(rt, history) == 1_000_000
+    assert rt["dragon_extra_active"] is True
+    assert zm.calculate_bet_amount(rt, history) == 1_005_000
+
+
+def test_dragon_extra_stops_after_miss():
+    history = [1, 1, 1, 1, 1]
+    rt = _dragon_extra_rt()
+    assert zm._get_dragon_extra_bet_amount(rt, history) == 1_000_000
+    zm._clear_dragon_extra_runtime(rt)
+    broken = history + [0]
+    assert zm._get_dragon_extra_bet_amount(rt) == 0
+    assert zm._get_dragon_extra_bet_amount(rt, broken) == 0
+    assert rt["dragon_extra_active"] is False
+    assert zm.calculate_bet_amount(rt, broken) == 5_000
+
+
+def test_dragon_extra_still_triggers_after_six_martingale_losses():
+    history = [0, 1, 1, 1, 1, 1]
+    rt = _dragon_extra_rt(lose_count=6, bet_amount=225_000)
+    extra = zm._get_dragon_extra_bet_amount(rt, history)
+    assert extra == 1_000_000
+    assert rt["dragon_extra_active"] is True
+    total = zm.calculate_bet_amount(rt, history)
+    assert total > 1_000_000
+    assert zm._apply_dragon_extra_direction(rt, history, 0) == 1

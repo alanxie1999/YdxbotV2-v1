@@ -1,7 +1,7 @@
 """
 zq_multiuser.py - 多用户版本核心逻辑
-版本：2.4.7
-日期：2026-07-02
+版本：2.4.8
+日期：2026-09-09
 功能：多用户押注、结算、命令处理
 """
 
@@ -663,11 +663,10 @@ def _apply_inferred_settle_from_history(state: UserState, rt: Dict[str, Any], op
             int(active_chain_summary.get("lose_count", 0)),
             old_lose_count + 1,
         )
-        # 长龙额外加注不中后，按默认金额下注
+        # 长龙额外加注不中后停止，按默认金额下注
         if rt.get("dragon_extra_active", False):
             rt["bet_amount"] = int(rt.get("initial_amount", 500))
-            rt["dragon_extra_active"] = False
-            rt["dragon_tail_streak"] = 0
+            _clear_dragon_extra_runtime(rt)
         else:
             rt["bet_amount"] = int(active_chain_summary.get("last_amount", bet_amount) or bet_amount)
     
@@ -4418,6 +4417,7 @@ async def _process_bet_on_slim(client, event, user_ctx: UserContext, global_conf
         rt["last_predict_confidence"] = 50
         rt["last_predict_reason"] = "无历史数据，默认下大"
     
+    prediction = _apply_dragon_extra_direction(rt, history, prediction)
     rt["last_predict_info"] = f"预测方向：{'大' if prediction == 1 else '小'} - {rt['last_predict_reason']}"
     log_event(logging.INFO, 'bet_on', '最终预测', user_id=user_ctx.user_id, 
               data=f"prediction={prediction} ({'大' if prediction == 1 else '小'})")
@@ -4916,39 +4916,110 @@ def calculate_bet_amount(rt: dict, history: list = None) -> int:
     return base + dragon_extra
 
 
-def _get_dragon_extra_bet_amount(rt: dict, history: list = None) -> int:
-    """5 连以上长龙期间，每次下注额外加 1000000，直到不中后停止。edb 关闭时禁用。"""
-    if not rt.get("edb", True):
+DRAGON_EXTRA_AMOUNT = 1000000
+DRAGON_EXTRA_MIN_STREAK = 5
+
+
+def _clear_dragon_extra_runtime(rt: dict) -> None:
+    rt["dragon_extra_active"] = False
+    rt["dragon_tail_streak"] = 0
+    rt["dragon_extra_kind"] = ""
+    rt["dragon_extra_direction"] = None
+
+
+def _get_alternation_tail_streak(history: list) -> int:
+    """返回历史尾部纯交替长度（1010... / 0101...）。"""
+    if not isinstance(history, list) or len(history) < 2:
         return 0
-    if rt.get("lose_count", 0) > 0:
-        rt["dragon_extra_active"] = False
-        rt["dragon_tail_streak"] = 0
-        # 不中时清除强制延续状态
-        rt["forced_bet_remaining"] = 0
-        rt["forced_bet_direction"] = 0
+    try:
+        streak = 1
+        for idx in range(len(history) - 1, 0, -1):
+            current = int(history[idx])
+            previous = int(history[idx - 1])
+            if current == 1 - previous:
+                streak += 1
+            else:
+                break
+        return streak
+    except Exception:
+        return 0
+
+
+def _detect_dragon_extra_signal(history: list) -> Dict[str, Any]:
+    """识别同向长龙或交替长龙，并给出额外加注方向。"""
+    if not isinstance(history, list) or len(history) < DRAGON_EXTRA_MIN_STREAK:
+        return {"active": False}
+
+    same_streak, same_dir = _get_history_tail_streak(history)
+    if same_streak >= DRAGON_EXTRA_MIN_STREAK:
+        return {
+            "active": True,
+            "kind": "same",
+            "streak": same_streak,
+            "direction": int(same_dir),
+        }
+
+    alt_streak = _get_alternation_tail_streak(history)
+    if alt_streak >= DRAGON_EXTRA_MIN_STREAK:
+        try:
+            latest = int(history[-1])
+        except Exception:
+            return {"active": False}
+        return {
+            "active": True,
+            "kind": "alt",
+            "streak": alt_streak,
+            "direction": 1 - latest,
+        }
+
+    return {"active": False}
+
+
+def _apply_dragon_extra_direction(rt: dict, history: list, prediction: int) -> int:
+    """同向长龙额外押同向；交替长龙额外押交替。"""
+    if not rt.get("edb", True):
+        return int(prediction)
+    if not rt.get("dragon_extra_active", False):
+        _get_dragon_extra_bet_amount(rt, history)
+    if not rt.get("dragon_extra_active", False):
+        return int(prediction)
+
+    direction = rt.get("dragon_extra_direction")
+    if direction not in (0, 1):
+        return int(prediction)
+
+    forced = int(direction)
+    kind = str(rt.get("dragon_extra_kind", "") or "")
+    kind_text = "同向" if kind == "same" else "交替"
+    side_text = "大" if forced == 1 else "小"
+    rt["last_predict_source"] = "dragon_extra"
+    rt["last_predict_tag"] = "DRAGON_EXTRA"
+    rt["last_predict_confidence"] = 100
+    rt["last_predict_reason"] = f"{kind_text}长龙额外加注，押{side_text}"
+    return forced
+
+
+def _get_dragon_extra_bet_amount(rt: dict, history: list = None) -> int:
+    """同向/交替长龙期间每次额外加 1000000；赢了继续，不中后停止。edb 关闭时禁用。"""
+    if not rt.get("edb", True):
+        _clear_dragon_extra_runtime(rt)
         return 0
 
     if history is None:
-        history = rt.get("_current_history", [])
-        if not history:
-            history = rt.get("_history_cache", [])
-    else:
-        rt["_history_cache"] = history
-
-    if not isinstance(history, list) or len(history) < 5:
-        rt["dragon_extra_active"] = False
+        if rt.get("dragon_extra_active", False):
+            return DRAGON_EXTRA_AMOUNT
         return 0
 
-    streak, _ = _get_history_tail_streak(history)
-
-    if streak >= 5:
+    rt["_history_cache"] = history
+    signal = _detect_dragon_extra_signal(history)
+    if signal.get("active"):
         rt["dragon_extra_active"] = True
-        rt["dragon_tail_streak"] = streak
-        return 1000000
+        rt["dragon_tail_streak"] = int(signal.get("streak", 0) or 0)
+        rt["dragon_extra_kind"] = str(signal.get("kind", "") or "")
+        rt["dragon_extra_direction"] = int(signal.get("direction", 0) or 0)
+        return DRAGON_EXTRA_AMOUNT
 
-    if rt.get("dragon_extra_active", False):
-        return 1000000
-
+    _clear_dragon_extra_runtime(rt)
     return 0
 
 
@@ -6510,11 +6581,10 @@ async def _process_settle_slim(client, event, user_ctx: UserContext, global_conf
                     int(active_chain_summary.get("lose_count", 0)),
                     int(old_lose_count) + 1,
                 )
-                # 长龙额外加注不中后，按默认金额下注
+                # 长龙额外加注不中后停止，按默认金额下注
                 if rt.get("dragon_extra_active", False):
                     rt["bet_amount"] = int(rt.get("initial_amount", 500))
-                    rt["dragon_extra_active"] = False
-                    rt["dragon_tail_streak"] = 0
+                    _clear_dragon_extra_runtime(rt)
                 else:
                     rt["bet_amount"] = int(active_chain_summary.get("last_amount", bet_amount) or bet_amount)
 
